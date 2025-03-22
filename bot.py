@@ -1,6 +1,7 @@
 import logging
 import openai
 import os
+import traceback
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackContext
 
@@ -30,7 +31,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Похоже, ты ещё не подписан на канал. Подпишись и снова нажми /check")
     except Exception as e:
         await update.message.reply_text("Не удалось проверить подписку. Попробуй позже.")
-        print(f"Ошибка при проверке подписки: {e}")
+        logging.error("Ошибка при проверке подписки:", exc_info=True)
 
 # Обработка изображения
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,11 +60,11 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Вот фидбек на твою иллюстрацию:\n\n{feedback}")
     except Exception as e:
         await update.message.reply_text("Произошла ошибка при анализе. Попробуй позже.")
-        print(f"Ошибка OpenAI: {e}")
+        logging.error("Ошибка при обращении к OpenAI:", exc_info=True)
 
 # Обработка ошибок
 async def error_handler(update: object, context: CallbackContext) -> None:
-    print(f"Произошла ошибка: {context.error}")
+    logging.error(f"Произошла ошибка: {context.error}", exc_info=True)
 
 # Запуск бота
 if __name__ == '__main__':
@@ -74,5 +75,5 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.PHOTO, handle_image))
     app.add_error_handler(error_handler)
 
-    print("Бот запущен...")
+    logging.info("Бот запущен...")
     app.run_polling(close_loop=False)
