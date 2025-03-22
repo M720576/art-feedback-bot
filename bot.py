@@ -1,7 +1,6 @@
 import logging
 import openai
 import os
-import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackContext
 from telegram.error import TelegramError
@@ -25,7 +24,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         if member.status in ["member", "creator", "administrator"]:
-            await update.message.reply_text("Отлично! Пришли мне иллюстрацию ✨")
+            await update.message.reply_text("Отлично! Пришли мне иллюстрацию ✨\nМожешь также добавить краткое описание или комментарий к ней в подписи.")
         else:
             await update.message.reply_text("Пока не вижу подписки. Подпишись на канал и снова нажми /check")
     except:
@@ -36,33 +35,29 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, отправь изображение.")
         return
 
-    photo = update.message.photo[-1]
-    photo_file = await photo.get_file()
-    file_url = photo_file.file_path
+    # Используем caption как описание, если оно есть
+    user_input = update.message.caption or "Это иллюстрация персонажа в мультяшном стиле."
 
-    prompt = "Проанализируй иллюстрацию и дай доброжелательную рецензию по композиции, цвету и выразительности персонажа."
+    prompt = (
+        "Ты — арт-директор. Пользователь прислал иллюстрацию."
+        " Дай доброжелательный и конструктивный фидбек: что хорошо, а что можно улучшить."
+        " Обрати внимание на композицию, цвет, анатомию, стиль, выразительность."
+    )
 
-    # Отправка изображения в Vision-модель GPT-4
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4-vision-preview",
+            model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Ты — опытный арт-директор, который даёт художникам подробный фидбек."},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": file_url}}
-                    ]
-                }
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_input}
             ],
-            max_tokens=500
+            max_tokens=600
         )
         feedback = response.choices[0].message.content
         await update.message.reply_text(f"Вот фидбек на твою иллюстрацию:\n\n{feedback}")
     except Exception as e:
-        await update.message.reply_text("Произошла ошибка при анализе изображения. Попробуй позже.")
-        print(f"Ошибка OpenAI Vision: {e}")
+        await update.message.reply_text("Произошла ошибка при анализе. Попробуй позже.")
+        print(f"Ошибка OpenAI: {e}")
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     print(f"Произошла ошибка: {context.error}")
