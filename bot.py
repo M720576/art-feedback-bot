@@ -1,7 +1,7 @@
 import logging
-import openai
 import os
 import traceback
+from openai import OpenAI
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackContext
 
@@ -10,7 +10,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 
-openai.api_key = OPENAI_API_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 logging.basicConfig(level=logging.INFO)
 
 # Стартовая команда
@@ -48,7 +48,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": prompt},
