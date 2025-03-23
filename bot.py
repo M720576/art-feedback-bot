@@ -1,5 +1,5 @@
-import logging
 import os
+import logging
 import base64
 import aiohttp
 from openai import OpenAI
@@ -9,15 +9,15 @@ from telegram.ext import (
     ContextTypes, CallbackContext, filters
 )
 
-# Получаем токены из переменных окружения
+# Загрузка переменных окружения
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 
-# Инициализация клиента OpenAI
+# Настройка клиента OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Настройка логирования
+# Настройка логгирования
 logging.basicConfig(level=logging.INFO)
 
 # Команда /start
@@ -57,12 +57,12 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Обрати внимание на композицию, цвет, форму, анатомию и выразительность."
     )
 
-    # Получаем URL изображения
+    # Получаем изображение из Telegram
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_url = file.file_path
 
-    # Скачиваем изображение и кодируем в base64
+    # Скачиваем и кодируем изображение
     async with aiohttp.ClientSession() as session:
         async with session.get(file_url) as resp:
             image_bytes = await resp.read()
@@ -72,7 +72,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4-turbo-vision",
             messages=[
                 {
                     "role": "user",
@@ -93,7 +93,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🎨 Вот фидбек на твою иллюстрацию:\n\n{feedback}")
     except Exception:
         await update.message.reply_text("Произошла ошибка при анализе. Попробуй позже.")
-        logging.error("Ошибка при обращении к GPT-4 Vision:", exc_info=True)
+        logging.error("Ошибка при обращении к GPT-4 Turbo Vision:", exc_info=True)
 
 # Обработка ошибок
 async def error_handler(update: object, context: CallbackContext) -> None:
