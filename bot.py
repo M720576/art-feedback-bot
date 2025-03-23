@@ -1,39 +1,49 @@
 import logging
 import os
-import traceback
+import base64
+import aiohttp
 from openai import OpenAI
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackContext
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, CallbackContext, filters
+)
 
 # Получаем токены из переменных окружения
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 
+# Инициализация клиента OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Стартовая команда
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Привет! Чтобы получить фидбек по иллюстрации, подпишись на {CHANNEL_USERNAME} и нажми /check ✅"
     )
 
-# Проверка подписки на канал
+# Команда /check — проверка подписки
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot = context.bot
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
         if member.status in ["member", "creator", "administrator"]:
-            await update.message.reply_text("Отлично! Пришли мне иллюстрацию ✨\nМожешь также добавить подпись к изображению, чтобы я точнее понял, что ты хочешь.")
+            await update.message.reply_text(
+                "Отлично! Пришли мне иллюстрацию ✨\n"
+                "Можешь также добавить подпись к изображению, чтобы я точнее понял, что ты хочешь."
+            )
         else:
             await update.message.reply_text("Похоже, ты ещё не подписан на канал. Подпишись и снова нажми /check")
-    except Exception as e:
+    except Exception:
         await update.message.reply_text("Не удалось проверить подписку. Попробуй позже.")
         logging.error("Ошибка при проверке подписки:", exc_info=True)
 
-# Обработка изображения
+# Обработка изображения и отправка в GPT-4 Vision
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Пожалуйста, отправь изображение как фото, а не как файл.")
@@ -42,25 +52,48 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.caption or "Это иллюстрация персонажа в мультяшном стиле."
 
     prompt = (
-        "Ты — опытный арт-директор. Пользователь прислал иллюстрацию."
-        " Дай доброжелательный, понятный и конструктивный фидбек: что хорошо, а что можно улучшить."
-        " Обрати внимание на композицию, цвет, форму, анатомию и выразительность."
+        "Ты — опытный арт-директор. Пользователь прислал иллюстрацию. "
+        "Дай доброжелательный, понятный и конструктивный фидбек: что хорошо, а что можно улучшить. "
+        "Обрати внимание на композицию, цвет, форму, анатомию и выразительность."
     )
+
+    # Получаем URL изображения
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    file_url = file.file_path
+
+    # Скачиваем изображение и кодируем в base64
+    async with aiohttp.ClientSession() as session:
+        async with session.get(file_url) as resp:
+            image_bytes = await resp.read()
+            base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+    await update.message.reply_text("Анализирую твою иллюстрацию... 🧠")
 
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4-vision-preview",
             messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_input}
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt + "\n\n" + user_input},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
             ],
-            max_tokens=600
+            max_tokens=1000,
         )
         feedback = response.choices[0].message.content
-        await update.message.reply_text(f"Вот фидбек на твою иллюстрацию:\n\n{feedback}")
-    except Exception as e:
+        await update.message.reply_text(f"🎨 Вот фидбек на твою иллюстрацию:\n\n{feedback}")
+    except Exception:
         await update.message.reply_text("Произошла ошибка при анализе. Попробуй позже.")
-        logging.error("Ошибка при обращении к OpenAI:", exc_info=True)
+        logging.error("Ошибка при обращении к GPT-4 Vision:", exc_info=True)
 
 # Обработка ошибок
 async def error_handler(update: object, context: CallbackContext) -> None:
