@@ -2,6 +2,9 @@ import os
 import logging
 import base64
 import aiohttp
+import json
+from datetime import datetime
+from pathlib import Path
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import (
@@ -19,6 +22,14 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
+
+# Файл для хранения информации о последних запросах
+REQUESTS_FILE = Path("requests.json")
+if REQUESTS_FILE.exists():
+    with open(REQUESTS_FILE, "r") as f:
+        user_last_request = json.load(f)
+else:
+    user_last_request = {}
 
 # Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,6 +60,14 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, отправь изображение как фото, а не как файл.")
         return
 
+    user_id = str(update.effective_user.id)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    last_date = user_last_request.get(user_id)
+
+    if last_date == today:
+        await update.message.reply_text("🚫 Ты уже отправлял изображение сегодня. Попробуй снова завтра!")
+        return
+
     user_input = update.message.caption or "Это иллюстрация персонажа в мультяшном стиле."
 
     prompt = (
@@ -71,7 +90,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4-turbo",  # актуальная модель
+            model="gpt-4-turbo",
             messages=[
                 {
                     "role": "user",
@@ -89,6 +108,12 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             max_tokens=1000,
         )
         feedback = response.choices[0].message.content
+
+        # Сохраняем дату обращения пользователя
+        user_last_request[user_id] = today
+        with open(REQUESTS_FILE, "w") as f:
+            json.dump(user_last_request, f)
+
         await update.message.reply_text(f"🎨 Вот фидбек на твою иллюстрацию:\n\n{feedback}")
     except Exception as e:
         await update.message.reply_text("Произошла ошибка при анализе. Попробуй позже.")
