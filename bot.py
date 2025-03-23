@@ -9,7 +9,7 @@ from telegram.ext import (
     ContextTypes, CallbackContext, filters
 )
 
-# Загрузка переменных окружения
+# Загружаем переменные окружения
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 CHANNEL_USERNAME = os.environ.get('CHANNEL_USERNAME')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
@@ -17,7 +17,7 @@ OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 # Настройка клиента OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Настройка логгирования
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
 # Команда /start
@@ -43,7 +43,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не удалось проверить подписку. Попробуй позже.")
         logging.error("Ошибка при проверке подписки:", exc_info=True)
 
-# Обработка изображения и отправка в GPT-4 Vision
+# Обработка изображения и анализ через GPT-4 Turbo (Vision)
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Пожалуйста, отправь изображение как фото, а не как файл.")
@@ -57,12 +57,11 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Обрати внимание на композицию, цвет, форму, анатомию и выразительность."
     )
 
-    # Получаем изображение из Telegram
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_url = file.file_path
 
-    # Скачиваем и кодируем изображение
+    # Скачиваем изображение и кодируем в base64
     async with aiohttp.ClientSession() as session:
         async with session.get(file_url) as resp:
             image_bytes = await resp.read()
@@ -72,7 +71,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4-turbo-vision",
+            model="gpt-4-turbo",  # актуальная модель
             messages=[
                 {
                     "role": "user",
@@ -91,9 +90,9 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         feedback = response.choices[0].message.content
         await update.message.reply_text(f"🎨 Вот фидбек на твою иллюстрацию:\n\n{feedback}")
-    except Exception:
+    except Exception as e:
         await update.message.reply_text("Произошла ошибка при анализе. Попробуй позже.")
-        logging.error("Ошибка при обращении к GPT-4 Turbo Vision:", exc_info=True)
+        logging.error("Ошибка при обращении к GPT-4 Turbo:", exc_info=True)
 
 # Обработка ошибок
 async def error_handler(update: object, context: CallbackContext) -> None:
