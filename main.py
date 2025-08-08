@@ -125,7 +125,7 @@ async def handle_image(m: Message):
 
     # проверяем лимит (владельца не ограничиваем)
     used = await get_count(user_id)
-    if user_id != OWNER_ID and used >= FREE_LIMIT:
+    if used >= FREE_LIMIT:
         await m.answer(
             "Лимит бесплатных запросов на этот месяц исчерпан. "
             "Если хочешь больше — напиши автору, добавим Pro/Unlimited."
@@ -153,14 +153,9 @@ async def handle_image(m: Message):
         reply = await analyze_image_with_gpt(prepared)
 
         # увеличиваем счётчик только для обычных пользователей
-        if user_id != OWNER_ID:
-            new_count = await inc_count(user_id)
-            left = max(FREE_LIMIT - new_count, 0)
-            left_text = f"Осталось бесплатных запросов в этом месяце: {left}"
-        else:
-            left_text = "Осталось бесплатных запросов в этом месяце: ∞ (для владельца)"
-
-        await m.answer(f"{reply}\n\n{left_text}")
+        new_count = await inc_count(user_id)
+        left = max(FREE_LIMIT - new_count, 0)
+        await m.answer(f"{reply}\n\nОсталось бесплатных запросов в этом месяце: {left}")
 
     except Exception as e:
         await m.answer("Упс, что-то пошло не так при обработке изображения. Попробуй ещё раз или пришли другую картинку.")
