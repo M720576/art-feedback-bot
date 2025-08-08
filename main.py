@@ -1,114 +1,176 @@
-import logging
+# main.py
+# Главный файл: телеграм-бот принимает картинку, зовёт ИИ и отвечает пользователю.
+
 import os
-import re
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram.types import FSInputFile
+import asyncio
+import base64
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message
+from aiogram.filters import CommandStart, Command
+
+from openai import OpenAI
+
+# Импорт PostgreSQL функций
 from db_pg import (
     init_db,
-    add_user,
-    get_attempts,
-    decrement_attempt,
-    reset_attempts,
-    count_users,
-    count_users_with_zero_attempts,
-    count_feedbacks
+    get_count,
+    inc_count,
+    save_feedback_and_grant_bonus,
+    already_sent_feedback_this_month,
+    month_stats
 )
 
-API_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_CHAT_ID = int(os.getenv("OWNER_CHAT_ID", "-1002092711646"))  # чат для фидбеков и статистики
-FREE_LIMIT = int(os.getenv("FREE_LIMIT", 3))
+from prompts import SYSTEM_PROMPT, USER_PROMPT
+from utils import downscale
 
-logging.basicConfig(level=logging.INFO)
+# Загружаем переменные окружения
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+FREE_LIMIT = int(os.getenv("FREE_LIMIT", "3"))
 
-bot = Bot(token=API_TOKEN)
+# chat_id группы для фидбека
+FEEDBACK_GROUP_ID = -1002092711646
+
+if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
+    raise RuntimeError("Не заданы TELEGRAM_BOT_TOKEN или OPENAI_API_KEY в переменных окружения.")
+
+bot = Bot(TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Инициализация базы
-init_db()
+WELCOME_TEXT = (
+    "Привет! Я Арт-feedback БОТ.\n"
+    f"Пришли мне изображение — дам разбор. На старте у тебя {FREE_LIMIT} бесплатных запросов."
+)
 
-# Хелпер: определение, фото это или иллюстрация
-def is_photo(file_name: str) -> bool:
-    ext = file_name.lower().split('.')[-1]
-    return ext in ["jpg", "jpeg", "png"]  # простой способ, можно расширить через file.mime_type
+@dp.message(CommandStart())
+async def start(m: Message):
+    await m.answer(WELCOME_TEXT)
 
-# Команда /start
-@dp.message(Command("start"))
-async def send_welcome(message: types.Message):
-    user_id = message.from_user.id
-    add_user(user_id)
-    await message.answer(
-        "🎨 Привет! Я арт-директор с опытом в сто лет, но слегка поехавший.\n"
-        "Присылай иллюстрацию, эскиз или скетч, и я дам тебе оценку по 10-бальной шкале.\n"
-        f"У тебя есть {FREE_LIMIT} бесплатных попыток!"
+def bytes_to_data_url(jpeg_bytes: bytes) -> str:
+    """Кодирует байты JPEG в data:URL для передачи в GPT-4o."""
+    b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}"
+
+async def analyze_image_with_gpt(image_bytes: bytes) -> str:
+    """Отправляет картинку + инструкцию в GPT-4o и возвращает текст ответа."""
+    data_url = bytes_to_data_url(image_bytes)
+
+    completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": USER_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ],
+        max_tokens=600,
+        temperature=0.4,
     )
+    reply = completion.choices[0].message.content or ""
+    return reply.strip()
 
-# Команда /stats — доступна только владельцу
-@dp.message(Command("stats"))
-async def send_stats(message: types.Message):
-    if message.chat.id != OWNER_CHAT_ID:
-        await message.answer("⛔ У тебя нет прав для этой команды.")
-        return
+@dp.message(F.photo | F.document)
+async def handle_image(m: Message):
+    """Обрабатываем присланные изображения."""
+    user_id = m.from_user.id
 
-    total_users = count_users()
-    zero_attempts = count_users_with_zero_attempts()
-    total_feedbacks = count_feedbacks()
-
-    stats_text = (
-        "📊 Статистика за всё время:\n"
-        f"👥 Всего пользователей: {total_users}\n"
-        f"❌ Пользователей без попыток: {zero_attempts}\n"
-        f"💬 Получено фидбеков: {total_feedbacks}"
-    )
-
-    await bot.send_message(OWNER_CHAT_ID, stats_text)
-
-# Обработка изображений
-@dp.message(lambda m: m.photo or (m.document and is_photo(m.document.file_name)))
-async def handle_image(message: types.Message):
-    user_id = message.from_user.id
-    attempts = get_attempts(user_id)
-
-    if attempts <= 0:
-        await message.answer(
-            "⛔ У тебя закончились попытки!\n"
-            "Напиши, что понравилось или не понравилось в боте, и я дам ещё 3 бесплатных."
+    # Проверяем лимит
+    used = await get_count(user_id)
+    if used >= FREE_LIMIT:
+        await m.answer(
+            "Лимит бесплатных запросов исчерпан. Напиши сюда, что тебе понравилось или не понравилось, "
+            "и получи ещё 3 запроса."
         )
         return
 
-    # Проверка на фото
-    if message.photo:
-        await message.answer("📷 Это похоже на фото. Я работаю только с иллюстрациями, рисунками и эскизами.")
+    # Берём файл
+    file_id = None
+    if m.photo:
+        file_id = m.photo[-1].file_id
+    elif m.document and m.document.mime_type and m.document.mime_type.startswith("image/"):
+        file_id = m.document.file_id
+    else:
+        await m.answer("Пришли, пожалуйста, фото или картинку (image/*).")
         return
 
-    decrement_attempt(user_id)
+    try:
+        tg_file = await bot.get_file(file_id)
+        file_stream = await bot.download_file(tg_file.file_path)
+        raw = file_stream.read()
 
-    score = 7  # тут можно внедрить реальную оценку
-    review = (
-        f"🎯 Оценка: {score}/10\n"
-        "1️⃣ Сильные стороны: динамика, интересные детали, смелые решения.\n"
-        "2️⃣ Слабые стороны: кое-где каша в композиции.\n"
-        "3️⃣ Советы: подчисти линии, добавь воздуха и не бойся убирать лишнее.\n"
-        "💥 Общий вердикт: У тебя талант, но давай поднажмём!"
+        # Уменьшаем и оптимизируем изображение
+        prepared = downscale(raw, max_side=1536)
+
+        await m.answer("Принял! Секунду, анализирую…")
+
+        reply = await analyze_image_with_gpt(prepared)
+
+        # Увеличиваем счётчик и показываем остаток
+        new_count = await inc_count(user_id)
+        left = max(FREE_LIMIT - new_count, 0)
+
+        await m.answer(f"{reply}\n\nОсталось бесплатных запросов: {left}")
+
+    except Exception as e:
+        await m.answer("Упс, что-то пошло не так при обработке изображения. Попробуй ещё раз или пришли другую картинку.")
+        print("ERROR:", e)
+
+# Любой текст после исчерпания лимита — считаем фидбеком
+@dp.message(F.text)
+async def handle_feedback(m: Message):
+    user_id = m.from_user.id
+    used = await get_count(user_id)
+
+    if used >= FREE_LIMIT:
+        # Проверяем, отправлял ли пользователь фидбек в этом месяце
+        if await already_sent_feedback_this_month(user_id):
+            await m.answer("Ты уже отправлял фидбек в этом месяце. Жду картинку для анализа!")
+            return
+
+        feedback_text = f"Фидбек от @{m.from_user.username or m.from_user.full_name} (id {user_id}):\n{m.text}"
+
+        # Отправляем фидбек в группу
+        try:
+            await bot.send_message(FEEDBACK_GROUP_ID, feedback_text)
+        except Exception as e:
+            print("ERROR sending feedback to group:", e)
+
+        # Сохраняем фидбек в базе и выдаём бонус
+        try:
+            await save_feedback_and_grant_bonus(user_id, m.text)
+            await m.answer("Спасибо за фидбек! Тебе добавлены ещё 3 бесплатных запроса в этом месяце.")
+        except Exception as e:
+            await m.answer("Принял фидбек, но не получилось обновить счётчик. Попробуй ещё раз позже.")
+            print("ERROR saving feedback:", e)
+    else:
+        await m.answer("Пришли картинку для анализа или используй команду /start.")
+
+# Команда статистики (доступна только владельцу)
+OWNER_ID = int(os.getenv("OWNER_ID", "151541823"))
+
+@dp.message(Command("stats"))
+async def stats(m: Message):
+    if m.from_user.id != OWNER_ID:
+        return
+    stats_data = await month_stats()
+    total_users = len(stats_data)
+    full_limit_users = sum(1 for _, count in stats_data if count >= FREE_LIMIT)
+    await m.answer(
+        f"📊 Статистика за месяц:\n"
+        f"Всего пользователей: {total_users}\n"
+        f"Использовали все {FREE_LIMIT} попыток: {full_limit_users}"
     )
 
-    await message.answer(review)
-
-# Обработка фидбека
-@dp.message(lambda m: not m.photo and not m.document and not m.text.startswith("/"))
-async def handle_feedback(message: types.Message):
-    user_id = message.from_user.id
-    attempts = get_attempts(user_id)
-
-    if attempts > 0:
-        return  # фидбек только если закончились попытки
-
-    feedback_text = f"📢 Фидбек от {message.from_user.username or message.from_user.id}:\n{message.text}"
-    await bot.send_message(OWNER_CHAT_ID, feedback_text)
-
-    reset_attempts(user_id)
-    await message.answer("✅ Принял фидбек! Я добавил тебе ещё 3 бесплатных попытки.")
+async def main():
+    await init_db()
+    print("Artdir feedback bot is up and running.")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(dp.start_polling(bot))
+    asyncio.run(main())
