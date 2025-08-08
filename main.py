@@ -33,7 +33,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 WELCOME_TEXT = (
     "Привет! Я Арт-feedback БОТ.
 "
-    f"Пришли мне изображение — дам разбор. На старте у тебя {FREE_LIMIT} бесплатных запросов."
+    "Пришли мне изображение — дам разбор. На старте у тебя {FREE_LIMIT} бесплатных запросов." 
 )
 
 @dp.message(CommandStart())
