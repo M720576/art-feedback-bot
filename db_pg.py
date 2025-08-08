@@ -203,14 +203,27 @@ async def reset_all_limits() -> None:
 async def reset_bot() -> None:
     """
     Полный сброс бота: очищает все основные таблицы (usage, feedback).
-    ВНИМАНИЕ: это необратимо. История и счётчики будут потеряны.
+    Логи выводят, сколько строк было удалено.
+    ВНИМАНИЕ: это необратимо.
     """
     if pool is None:
         raise RuntimeError("DB pool is not initialized. Call init_db() first.")
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Экраннирование нужно: "usage" — зарезервированное слово
+            # usage
+            deleted_usage = await conn.fetchval('SELECT COUNT(*) FROM public."usage";')
             await conn.execute('TRUNCATE TABLE public."usage" RESTART IDENTITY CASCADE;')
+            print(f"[RESET BOT] Таблица usage очищена. Было строк: {deleted_usage}")
+
+            # feedback
+            deleted_feedback = await conn.fetchval('SELECT COUNT(*) FROM public."feedback";')
             await conn.execute('TRUNCATE TABLE public."feedback" RESTART IDENTITY CASCADE;')
-            # Если у тебя есть другие таблицы — добавь их сюда аналогично.
+            print(f"[RESET BOT] Таблица feedback очищена. Было строк: {deleted_feedback}")
+
+            # Если есть другие таблицы — добавь сюда аналогично:
+            # deleted_other = await conn.fetchval('SELECT COUNT(*) FROM public."other";')
+            # await conn.execute('TRUNCATE TABLE public."other" RESTART IDENTITY CASCADE;')
+            # print(f"[RESET BOT] Таблица other очищена. Было строк: {deleted_other}")
+
+    print("[RESET BOT] Полный сброс завершён.")
