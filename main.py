@@ -69,8 +69,8 @@ async def analyze_image_with_gpt(image_bytes: bytes) -> str:
                 ],
             },
         ],
-        max_tokens=600,
-        temperature=0.4,
+        max_tokens=700,
+        temperature=0.5,
     )
     reply = completion.choices[0].message.content or ""
     return reply.strip()
