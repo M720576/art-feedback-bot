@@ -10,19 +10,17 @@ from aiogram.types import Message
 from aiogram.filters import CommandStart, Command
 
 from openai import OpenAI
-
 from db_pg import (
     init_db,
     get_count,
     inc_count,
     save_feedback_and_grant_bonus,
     already_sent_feedback_this_month,
-    month_stats,
+    month_stats
 )
 from prompts import SYSTEM_PROMPT, USER_PROMPT
 from utils import downscale
 
-# Доп. инструкция: даже если это фото — анализ всё равно делаем
 EXTRA_INSTRUCTION = (
     "Важно: если изображение окажется фотографией, всё равно выполни краткий анализ по тем же пунктам, "
     "как для иллюстрации. В начале коротко предупреди, что это фото, и продолжи.\n"
@@ -59,11 +57,7 @@ async def stats(m: Message):
     if m.from_user.id != OWNER_ID:
         await m.answer("Команда доступна только владельцу.")
         return
-    # month_stats может принимать free_limit или брать из ENV — поддержим оба варианта
-    try:
-        users_total, users_hit_limit, total_requests, feedback_count = await month_stats(FREE_LIMIT)
-    except TypeError:
-        users_total, users_hit_limit, total_requests, feedback_count = await month_stats()
+    users_total, users_hit_limit, total_requests, feedback_count = await month_stats(FREE_LIMIT)
     await m.answer(
         "📊 Статистика за текущий месяц:\n"
         f"• Уникальных пользователей: {users_total}\n"
@@ -71,6 +65,17 @@ async def stats(m: Message):
         f"• Всего запросов: {total_requests}\n"
         f"• Отправили отзыв: {feedback_count}"
     )
+
+# --- Новая команда для сброса лимитов ---
+@dp.message(Command("reset_limits"))
+async def reset_limits(m: Message):
+    if m.from_user.id != OWNER_ID:
+        await m.answer("Команда доступна только владельцу.")
+        return
+    from db_pg import _pool, current_month
+    async with _pool.acquire() as conn:
+        await conn.execute("DELETE FROM usage WHERE month=$1", current_month())
+    await m.answer("✅ Лимиты для всех пользователей сброшены.")
 
 @dp.message(Command("feedback"))
 async def feedback(m: Message):
@@ -96,25 +101,20 @@ async def feedback(m: Message):
         await m.answer("Напиши так:\n/feedback Что понравилось/не понравилось и что улучшить.")
         return
 
-    # Перешлём отзыв владельцу (как просил — фидбек не трогаем)
     try:
         await bot.send_message(OWNER_ID, f"📝 Отзыв от @{m.from_user.username or user_id} (id {user_id}):\n\n{payload}")
     except Exception:
         await bot.send_message(OWNER_ID, f"📝 Отзыв от id {user_id}:\n\n{payload}")
 
-    # Сохраним и дадим бонус
     await save_feedback_and_grant_bonus(user_id, payload, FREE_LIMIT)
     await m.answer("Принял! Спасибо за отзыв — накинул тебе ещё 3 бесплатных попытки в этом месяце. Жду новую иллюстрацию.")
 
 def bytes_to_data_url(jpeg_bytes: bytes) -> str:
-    """Кодирует байты JPEG в data:URL для передачи в GPT-4o."""
     b64 = base64.b64encode(jpeg_bytes).decode("ascii")
     return f"data:image/jpeg;base64,{b64}"
 
 async def analyze_image_with_gpt(image_bytes: bytes) -> str:
-    """Отправляет картинку + инструкцию в GPT-4o и возвращает текст ответа."""
     data_url = bytes_to_data_url(image_bytes)
-
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -127,18 +127,15 @@ async def analyze_image_with_gpt(image_bytes: bytes) -> str:
                 ],
             },
         ],
-        max_tokens=700,     # чутка больше места под разбор
-        temperature=0.5,    # немного живее стиль, но без рандома
+        max_tokens=600,
+        temperature=0.4,
     )
     reply = completion.choices[0].message.content or ""
     return reply.strip()
 
 @dp.message(F.photo | F.document)
 async def handle_image(m: Message):
-    """Обрабатываем присланные изображения (фото/док) — анализируем всё."""
     user_id = m.from_user.id
-
-    # проверяем лимит
     used = await get_count(user_id)
     if used >= FREE_LIMIT:
         if await already_sent_feedback_this_month(user_id):
@@ -149,12 +146,10 @@ async def handle_image(m: Message):
         else:
             await m.answer(
                 "Лимит исчерпан. Хочешь ещё +3 бесплатных в этом месяце? "
-                "Отправь команду:\n\n"
-                "/feedback Что понравилось/не понравилось в боте и что улучшить"
+                "Отправь команду:\n\n/feedback Что понравилось/не понравилось в боте и что улучшить"
             )
         return
 
-    # вытаскиваем файл
     file_id = None
     if m.photo:
         file_id = m.photo[-1].file_id
@@ -173,8 +168,6 @@ async def handle_image(m: Message):
         await m.answer("Принял! Секунду, анализирую твою работу… 🤔")
 
         reply = await analyze_image_with_gpt(prepared)
-
-        # увеличиваем счётчик и сообщаем остаток
         new_count = await inc_count(user_id)
         left = max(FREE_LIMIT - new_count, 0)
         await m.answer(f"{reply}\n\nОсталось бесплатных запросов в этом месяце: {left}")
