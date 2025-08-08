@@ -158,14 +158,24 @@ OWNER_ID = int(os.getenv("OWNER_ID", "151541823"))
 async def stats(m: Message):
     if m.from_user.id != OWNER_ID:
         return
-    stats_data = await month_stats()
-    total_users = len(stats_data)
-    full_limit_users = sum(1 for _, count in stats_data if count >= FREE_LIMIT)
-    await m.answer(
-        f"📊 Статистика за месяц:\n"
-        f"Всего пользователей: {total_users}\n"
-        f"Использовали все {FREE_LIMIT} попыток: {full_limit_users}"
+    users_total, users_hit_limit, total_requests, feedback_count = await month_stats()
+    stats_msg = (
+        "📊 Статистика за текущий месяц:
+"
+        f"• Уникальных пользователей: {users_total}
+"
+        f"• Дошли до лимита ({FREE_LIMIT}): {users_hit_limit}
+"
+        f"• Всего запросов: {total_requests}
+"
+        f"• Отправили отзыв: {feedback_count}"
     )
+    try:
+        await bot.send_message(FEEDBACK_GROUP_ID, stats_msg)
+    finally:
+        # в личке ответим коротко, чтобы ты понял, что отправлено
+        if m.chat.id != FEEDBACK_GROUP_ID:
+            await m.answer("Готово. Статистика отправлена в группу с фидбеком.")
 
 async def main():
     await init_db()
