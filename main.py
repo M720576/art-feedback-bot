@@ -11,7 +11,7 @@ from aiogram.filters import CommandStart
 
 from openai import OpenAI
 
-from db import init_db, get_count, inc_count
+from db_pg import init_db, get_count, inc_count
 from prompts import SYSTEM_PROMPT, USER_PROMPT
 from utils import downscale
 
