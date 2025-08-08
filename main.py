@@ -12,7 +12,7 @@ from aiogram.filters import CommandStart, Command
 from openai import OpenAI
 
 # Импорт PostgreSQL функций
-from db_pg import (
+from db_pg import init_db, get_count, inc_count, save_feedback_and_grant_bonus, already_sent_feedback_this_month, month_stats
     init_db,
     get_count,
     inc_count,
@@ -48,6 +48,40 @@ WELCOME_TEXT = (
 async def start(m: Message):
     await m.answer(WELCOME_TEXT)
 
+
+@dp.message(Command("stats"))
+async def stats(m: Message):
+    # Только владелец (OWNER_ID) может запрашивать статистику
+    owner_id = int(os.getenv("OWNER_ID", "151541823"))
+    if m.from_user.id != owner_id:
+        await m.answer("Команда доступна только владельцу.")
+        return
+
+    # Берём аггрегированные цифры из БД (month_stats уже считает за текущий месяц)
+    try:
+        users_total, users_hit_limit, total_requests, feedback_count = await month_stats()
+    except TypeError:
+        # На случай старой сигнатуры month_stats(free_limit)
+        users_total, users_hit_limit, total_requests, feedback_count = await month_stats(int(os.getenv("FREE_LIMIT", "3")))
+
+    stats_msg = (
+        "📊 Статистика за текущий месяц:\n"
+        f"• Уникальных пользователей: {users_total}\n"
+        f"• Дошли до лимита ({FREE_LIMIT}): {users_hit_limit}\n"
+        f"• Всего запросов: {total_requests}\n"
+        f"• Отправили отзыв: {feedback_count}"
+    )
+
+    # Шлём отчёт в группу фидбеков
+    try:
+        await bot.send_message(FEEDBACK_GROUP_ID, stats_msg)
+    except Exception as e:
+        await m.answer("Не удалось отправить статистику в группу. Проверьте FEEDBACK_GROUP_ID.")
+        return
+
+    # Подтверждение инициатору, если он писал не в группе
+    if m.chat.id != FEEDBACK_GROUP_ID:
+        await m.answer("Готово. Статистика отправлена в группу фидбеков.")
 def bytes_to_data_url(jpeg_bytes: bytes) -> str:
     """Кодирует байты JPEG в data:URL для передачи в GPT-4o."""
     b64 = base64.b64encode(jpeg_bytes).decode("ascii")
@@ -154,8 +188,7 @@ async def handle_feedback(m: Message):
 # Команда статистики (доступна только владельцу)
 OWNER_ID = int(os.getenv("OWNER_ID", "151541823"))
 
-@dp.message(Command("stats"))
-async def stats(m: Message):
+def stats(m: Message):
     if m.from_user.id != OWNER_ID:
         return
     users_total, users_hit_limit, total_requests, feedback_count = await month_stats()
