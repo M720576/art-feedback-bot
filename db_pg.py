@@ -78,8 +78,13 @@ async def already_sent_feedback_this_month(user_id: int) -> bool:
         )
         return bool(exists)
 
-async def save_feedback_and_grant_bonus(user_id: int, text: str, free_limit: int) -> None:
+async def save_feedback_and_grant_bonus(user_id: int, text: str, free_limit: int | None = None) -> None:
     """Сохраняет фидбек и выдаёт +3 попытки один раз в месяц."""
+    if free_limit is None:
+        try:
+            free_limit = int(os.getenv("FREE_LIMIT", "3"))
+        except Exception:
+            free_limit = 3
     m = current_month()
     async with _pool.acquire() as conn:
         async with conn.transaction():
@@ -109,8 +114,13 @@ async def save_feedback_and_grant_bonus(user_id: int, text: str, free_limit: int
                     )
 
 # --- статистика ---
-async def month_stats(free_limit: int):
+async def month_stats(free_limit: int | None = None):
     """Возвращает (users_total, users_hit_limit, total_requests, feedback_count) за текущий месяц."""
+    if free_limit is None:
+        try:
+            free_limit = int(os.getenv("FREE_LIMIT", "3"))
+        except Exception:
+            free_limit = 3
     m = current_month()
     async with _pool.acquire() as conn:
         users_total = await conn.fetchval(
