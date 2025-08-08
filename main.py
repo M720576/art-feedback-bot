@@ -12,7 +12,7 @@ from aiogram.filters import CommandStart, Command
 
 from openai import OpenAI
 
-from db_pg import init_db, get_count, inc_count
+from db_pg import init_db, get_count, inc_count, save_feedback_and_grant_bonus, already_sent_feedback_this_month, month_stats
 from prompts import SYSTEM_PROMPT, USER_PROMPT
 from utils import downscale
 
@@ -126,10 +126,18 @@ async def handle_image(m: Message):
     # проверяем лимит (владельца не ограничиваем)
     used = await get_count(user_id)
     if used >= FREE_LIMIT:
-        await m.answer(
-            "Лимит бесплатных запросов на этот месяц исчерпан. "
-            "Если хочешь больше — напиши автору, добавим Pro/Unlimited."
-        )
+        if await already_sent_feedback_this_month(user_id):
+            await m.answer(
+                "Лимит исчерпан на этот месяц. Ты уже отправлял фидбек и получил +3. "
+                "Дальше — платные лимиты. Напиши автору, если хочешь Pro/Unlimited."
+            )
+        else:
+            await m.answer(
+                "Лимит исчерпан. Хочешь ещё +3 бесплатных в этом месяце? "
+                "Отправь команду:
+
+/feedback Что понравилось/не понравилось в боте и что улучшить"
+            )
         return
 
     # вытаскиваем файл
