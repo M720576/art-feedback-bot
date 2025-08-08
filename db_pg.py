@@ -166,3 +166,10 @@ async def reset_all_limits() -> None:
             "UPDATE usage SET count = 0 WHERE month = $1",
             m
         )
+async def reset_bot() -> None:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("TRUNCATE TABLE usage RESTART IDENTITY CASCADE;")
+            await conn.execute("TRUNCATE TABLE feedback RESTART IDENTITY CASCADE;")
+            # если есть таблица отзывов
+            await conn.execute("TRUNCATE TABLE reviews RESTART IDENTITY CASCADE;")
