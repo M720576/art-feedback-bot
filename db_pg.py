@@ -1,16 +1,18 @@
-# db_pg.py — лимиты + фидбек + статистика (PostgreSQL)
+# db_pg.py — Postgres: лимиты, фидбек, статистика (месячная)
 import os
 import asyncpg
 from datetime import datetime
+from typing import Optional, Tuple
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-_pool = None  # пул соединений
+_pool: Optional[asyncpg.pool.Pool] = None
 
 def current_month() -> str:
+    """YYYY-MM по UTC."""
     return datetime.utcnow().strftime("%Y-%m")
 
-async def init_db():
-    """Создаём пул и таблицы (если нет)."""
+async def init_db() -> None:
+    """Создаёт пул и таблицы (если ещё нет)."""
     global _pool
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL не задан. Проверь Variables в Railway.")
@@ -18,7 +20,7 @@ async def init_db():
     _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
 
     async with _pool.acquire() as conn:
-        # основная таблица по лимитам
+        # учёт количества запросов на пользователя в пределах месяца
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS usage (
             user_id BIGINT NOT NULL,
@@ -27,8 +29,7 @@ async def init_db():
             PRIMARY KEY (user_id, month)
         );
         """)
-
-        # таблица фидбека (для +3 попыток и твоей статистики)
+        # фидбек (1+ сообщений в месяц допустимо; бонус выдаём один раз)
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS feedback (
             id         BIGSERIAL PRIMARY KEY,
@@ -40,14 +41,17 @@ async def init_db():
         """)
 
 async def get_count(user_id: int) -> int:
+    """Сколько запросов сделал пользователь в текущем месяце."""
+    m = current_month()
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT count FROM usage WHERE user_id=$1 AND month=$2",
-            user_id, current_month()
+            user_id, m
         )
         return int(row["count"]) if row else 0
 
 async def inc_count(user_id: int) -> int:
+    """Увеличивает счётчик на 1 и возвращает новое значение."""
     m = current_month()
     async with _pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -68,8 +72,8 @@ async def inc_count(user_id: int) -> int:
             )
         return new_count
 
-# --- фидбек + бонусы ---
 async def already_sent_feedback_this_month(user_id: int) -> bool:
+    """Проверка: отправлял ли фидбек в этом месяце (для выдачи бонуса только 1 раз/мес)."""
     m = current_month()
     async with _pool.acquire() as conn:
         exists = await conn.fetchval(
@@ -78,49 +82,63 @@ async def already_sent_feedback_this_month(user_id: int) -> bool:
         )
         return bool(exists)
 
-async def save_feedback_and_grant_bonus(user_id: int, text: str, free_limit: int | None = None) -> None:
-    """Сохраняет фидбек и выдаёт +3 попытки один раз в месяц."""
+async def save_feedback_and_grant_bonus(user_id: int, text: str, free_limit: Optional[int] = None) -> None:
+    """
+    Сохраняет фидбек и "выдаёт +free_limit" (по факту — уменьшает счётчик на free_limit),
+    но только 1 раз в текущем месяце.
+    """
     if free_limit is None:
         try:
             free_limit = int(os.getenv("FREE_LIMIT", "3"))
         except Exception:
             free_limit = 3
+
     m = current_month()
     async with _pool.acquire() as conn:
         async with conn.transaction():
+            # если уже был фидбек в этом месяце — бонус не выдаём
             exists = await conn.fetchval(
                 "SELECT 1 FROM feedback WHERE user_id=$1 AND month=$2 LIMIT 1",
                 user_id, m
             )
-            if not exists:
+            if exists:
+                return
+
+            # сохраняем сам фидбек
+            await conn.execute(
+                "INSERT INTO feedback(user_id, month, text) VALUES ($1, $2, $3)",
+                user_id, m, text
+            )
+
+            # уменьшаем текущий счётчик на free_limit (минимум 0)
+            row = await conn.fetchrow(
+                "SELECT count FROM usage WHERE user_id=$1 AND month=$2",
+                user_id, m
+            )
+            if row:
+                new_count = max(int(row["count"]) - free_limit, 0)
                 await conn.execute(
-                    "INSERT INTO feedback(user_id, month, text) VALUES ($1, $2, $3)",
-                    user_id, m, text
+                    "UPDATE usage SET count=$1 WHERE user_id=$2 AND month=$3",
+                    new_count, user_id, m
                 )
-                row = await conn.fetchrow(
-                    "SELECT count FROM usage WHERE user_id=$1 AND month=$2",
+            else:
+                # если записей не было, просто создадим с 0
+                await conn.execute(
+                    "INSERT INTO usage(user_id, month, count) VALUES ($1, $2, 0)",
                     user_id, m
                 )
-                if row:
-                    new_count = max(int(row["count"]) - free_limit, 0)
-                    await conn.execute(
-                        "UPDATE usage SET count=$1 WHERE user_id=$2 AND month=$3",
-                        new_count, user_id, m
-                    )
-                else:
-                    await conn.execute(
-                        "INSERT INTO usage(user_id, month, count) VALUES ($1, $2, 0)",
-                        user_id, m
-                    )
 
-# --- статистика ---
-async def month_stats(free_limit: int | None = None):
-    """Возвращает (users_total, users_hit_limit, total_requests, feedback_count) за текущий месяц."""
+async def month_stats(free_limit: Optional[int] = None) -> Tuple[int, int, int, int]:
+    """
+    Возвращает (users_total, users_hit_limit, total_requests, feedback_count) за текущий месяц.
+    users_hit_limit — пользователи, у кого count >= FREE_LIMIT.
+    """
     if free_limit is None:
         try:
             free_limit = int(os.getenv("FREE_LIMIT", "3"))
         except Exception:
             free_limit = 3
+
     m = current_month()
     async with _pool.acquire() as conn:
         users_total = await conn.fetchval(
