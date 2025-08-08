@@ -41,6 +41,55 @@ WELCOME_TEXT = (
 async def start(m: Message):
     await m.answer(WELCOME_TEXT)
 
+@dp.message(Command("stats"))
+async def stats(m: Message):
+    if m.from_user.id != OWNER_ID:
+        await m.answer("Команда доступна только владельцу.")
+        return
+    users_total, users_hit_limit, total_requests, feedback_count = await month_stats(FREE_LIMIT)
+    await m.answer(
+        "📊 Статистика за текущий месяц:\n"
+        f"• Уникальных пользователей: {users_total}\n"
+        f"• Дошли до лимита (использовали {FREE_LIMIT}): {users_hit_limit}\n"
+        f"• Всего запросов: {total_requests}\n"
+        f"• Отправили отзыв: {feedback_count}"
+    )
+
+
+@dp.message(Command("feedback"))
+async def feedback(m: Message):
+    user_id = m.from_user.id
+    text = m.text or ""
+    parts = text.split(" ", 1)
+    payload = parts[1].strip() if len(parts) > 1 else ""
+
+    if user_id == OWNER_ID:
+        await m.answer("Эта команда для пользователей, чтобы прислать тебе отзыв :)")
+        return
+
+    used = await get_count(user_id)
+    if used < FREE_LIMIT:
+        await m.answer("У тебя ещё есть бесплатные запросы — доиспользуй их, а потом приходи за +3 🙂")
+        return
+
+    if await already_sent_feedback_this_month(user_id):
+        await m.answer("Ты уже присылал отзыв в этом месяце и получил +3. Спасибо!")
+        return
+
+    if not payload:
+        await m.answer("Напиши так:\n/feedback Что понравилось/не понравилось и что улучшить.")
+        return
+
+    # Перешлём отзыв владельцу
+    try:
+        await bot.send_message(OWNER_ID, f"📝 Отзыв от @{m.from_user.username or user_id} (id {user_id}):\n\n{payload}")
+    except Exception:
+        await bot.send_message(OWNER_ID, f"📝 Отзыв от id {user_id}:\n\n{payload}")
+
+    # Сохраним и дадим бонус
+    await save_feedback_and_grant_bonus(user_id, payload, FREE_LIMIT)
+    await m.answer("Принял! Спасибо за отзыв — накинул тебе ещё 3 бесплатных попытки в этом месяце. Жду новую иллюстрацию.")
+
 def bytes_to_data_url(jpeg_bytes: bytes) -> str:
     """Кодирует байты JPEG в data:URL для передачи в GPT-4o."""
     b64 = base64.b64encode(jpeg_bytes).decode("ascii")
