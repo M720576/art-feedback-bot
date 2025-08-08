@@ -16,7 +16,8 @@ from db_pg import (
     inc_count,
     save_feedback_and_grant_bonus,
     already_sent_feedback_this_month,
-    month_stats
+    month_stats,
+    reset_all_limits,   # <-- добавили
 )
 from prompts import SYSTEM_PROMPT, USER_PROMPT
 from utils import downscale
@@ -67,15 +68,13 @@ async def stats(m: Message):
     )
 
 # --- Новая команда для сброса лимитов ---
-@dp.message(Command("reset_limits"))
+@dp.message(Command("reset_limits")))
 async def reset_limits(m: Message):
     if m.from_user.id != OWNER_ID:
         await m.answer("Команда доступна только владельцу.")
         return
-    from db_pg import _pool, current_month
-    async with _pool.acquire() as conn:
-        await conn.execute("DELETE FROM usage WHERE month=$1", current_month())
-    await m.answer("✅ Лимиты для всех пользователей сброшены.")
+    await reset_all_limits()
+    await m.answer("✅ Лимиты для всех пользователей на текущий месяц сброшены.")
 
 @dp.message(Command("feedback"))
 async def feedback(m: Message):
