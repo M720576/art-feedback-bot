@@ -189,7 +189,7 @@ async def handle_text_feedback(m: Message):
 
     try:
         await bot.send_message(
-            OWNER_ID,
+            FEEDBACK_GROUP_ID,
             f"📝 Отзыв от @{m.from_user.username or user_id} (id {user_id}):\n\n{text}",
         )
     except Exception:
