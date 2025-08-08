@@ -15,10 +15,13 @@ from db import init_db, get_count, inc_count
 from prompts import SYSTEM_PROMPT, USER_PROMPT
 from utils import downscale
 
-# Загружаем переменные окружения из Railway/Render (там их настроим в UI)
+# Загружаем переменные окружения
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 FREE_LIMIT = int(os.getenv("FREE_LIMIT", "3"))
+
+# Твой Telegram ID (владелец бота)
+OWNER_ID = 151541823
 
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise RuntimeError("Не заданы TELEGRAM_BOT_TOKEN или OPENAI_API_KEY в переменных окружения.")
@@ -44,10 +47,7 @@ def bytes_to_data_url(jpeg_bytes: bytes) -> str:
     return f"data:image/jpeg;base64,{b64}"
 
 async def analyze_image_with_gpt(image_bytes: bytes) -> str:
-    """
-    Отправляет картинку + инструкцию в GPT-4o и возвращает текст ответа.
-    Для MVP используем gpt-4o-mini (дешевле и быстрый), позже можно gpt-4o.
-    """
+    """Отправляет картинку + инструкцию в GPT-4o и возвращает текст ответа."""
     data_url = bytes_to_data_url(image_bytes)
 
     completion = client.chat.completions.create(
@@ -70,19 +70,19 @@ async def analyze_image_with_gpt(image_bytes: bytes) -> str:
 
 @dp.message(F.photo | F.document)
 async def handle_image(m: Message):
-    """Обрабатываем присланные изображения (фото или документ-изображение)."""
+    """Обрабатываем присланные изображения."""
     user_id = m.from_user.id
 
-    # проверяем лимит
+    # проверяем лимит (владельца не ограничиваем)
     used = await get_count(user_id)
-    if used >= FREE_LIMIT:
+    if user_id != OWNER_ID and used >= FREE_LIMIT:
         await m.answer(
             "Лимит бесплатных запросов на этот месяц исчерпан. "
             "Если хочешь больше — напиши автору, добавим Pro/Unlimited."
         )
         return
 
-    # вытаскиваем файл: берём самую большую версию фото или документ-картинку
+    # вытаскиваем файл
     file_id = None
     if m.photo:
         file_id = m.photo[-1].file_id
@@ -97,23 +97,23 @@ async def handle_image(m: Message):
         file_stream = await bot.download_file(tg_file.file_path)
         raw = file_stream.read()
 
-        # минифицируем (экономим деньги и ускоряем ответ)
         prepared = downscale(raw, max_side=1536)
-
         await m.answer("Принял! Секунду, анализирую твою работу… 🤔")
 
         reply = await analyze_image_with_gpt(prepared)
 
-        # увеличиваем счётчик и считаем, сколько осталось
-        new_count = await inc_count(user_id)
-        left = max(FREE_LIMIT - new_count, 0)
+        # увеличиваем счётчик только для обычных пользователей
+        if user_id != OWNER_ID:
+            new_count = await inc_count(user_id)
+            left = max(FREE_LIMIT - new_count, 0)
+            left_text = f"Осталось бесплатных запросов в этом месяце: {left}"
+        else:
+            left_text = "Осталось бесплатных запросов в этом месяце: ∞ (для владельца)"
 
-        await m.answer(f"{reply}\n\nОсталось бесплатных запросов в этом месяце: {left}")
+        await m.answer(f"{reply}\n\n{left_text}")
 
     except Exception as e:
-        # Ловим неожиданные ошибки, чтобы бот не молчал
         await m.answer("Упс, что-то пошло не так при обработке изображения. Попробуй ещё раз или пришли другую картинку.")
-        # Для отладки можно логировать e в консоль (Railway покажет в Logs)
         print("ERROR:", e)
 
 async def main():
