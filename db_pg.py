@@ -158,3 +158,11 @@ async def month_stats(free_limit: Optional[int] = None) -> Tuple[int, int, int, 
             m
         ) or 0
     return int(users_total), int(users_hit_limit), int(total_requests), int(feedback_count)
+    async def reset_all_counts():
+    """Сбрасывает счётчики запросов для всех пользователей в текущем месяце."""
+    m = current_month()
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE usage SET count = 0 WHERE month = $1",
+            m
+        )
