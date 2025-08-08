@@ -7,7 +7,8 @@ import base64
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
+
 
 from openai import OpenAI
 
