@@ -68,7 +68,7 @@ async def stats(m: Message):
     )
 
 # --- Новая команда для сброса лимитов ---
-@dp.message(Command("reset_limits")))
+@dp.message(Command("reset_limits"))
 async def reset_limits(m: Message):
     if m.from_user.id != OWNER_ID:
         await m.answer("Команда доступна только владельцу.")
