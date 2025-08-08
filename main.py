@@ -9,18 +9,24 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import CommandStart, Command
 
-
 from openai import OpenAI
 
-from db_pg import init_db, get_count, inc_count, save_feedback_and_grant_bonus, already_sent_feedback_this_month, month_stats
+from db_pg import (
+    init_db,
+    get_count,
+    inc_count,
+    save_feedback_and_grant_bonus,
+    already_sent_feedback_this_month,
+    month_stats,
+)
 from prompts import SYSTEM_PROMPT, USER_PROMPT
+from utils import downscale
 
+# Доп. инструкция: даже если это фото — анализ всё равно делаем
 EXTRA_INSTRUCTION = (
     "Важно: если изображение окажется фотографией, всё равно выполни краткий анализ по тем же пунктам, "
     "как для иллюстрации. В начале коротко предупреди, что это фото, и продолжи.\n"
 )
-
-from utils import downscale
 
 # Загружаем переменные окружения
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -53,7 +59,11 @@ async def stats(m: Message):
     if m.from_user.id != OWNER_ID:
         await m.answer("Команда доступна только владельцу.")
         return
-    users_total, users_hit_limit, total_requests, feedback_count = await month_stats(FREE_LIMIT)
+    # month_stats может принимать free_limit или брать из ENV — поддержим оба варианта
+    try:
+        users_total, users_hit_limit, total_requests, feedback_count = await month_stats(FREE_LIMIT)
+    except TypeError:
+        users_total, users_hit_limit, total_requests, feedback_count = await month_stats()
     await m.answer(
         "📊 Статистика за текущий месяц:\n"
         f"• Уникальных пользователей: {users_total}\n"
@@ -61,7 +71,6 @@ async def stats(m: Message):
         f"• Всего запросов: {total_requests}\n"
         f"• Отправили отзыв: {feedback_count}"
     )
-
 
 @dp.message(Command("feedback"))
 async def feedback(m: Message):
@@ -87,7 +96,7 @@ async def feedback(m: Message):
         await m.answer("Напиши так:\n/feedback Что понравилось/не понравилось и что улучшить.")
         return
 
-    # Перешлём отзыв владельцу
+    # Перешлём отзыв владельцу (как просил — фидбек не трогаем)
     try:
         await bot.send_message(OWNER_ID, f"📝 Отзыв от @{m.from_user.username or user_id} (id {user_id}):\n\n{payload}")
     except Exception:
@@ -118,18 +127,18 @@ async def analyze_image_with_gpt(image_bytes: bytes) -> str:
                 ],
             },
         ],
-        max_tokens=600,
-        temperature=0.4,
+        max_tokens=700,     # чутка больше места под разбор
+        temperature=0.5,    # немного живее стиль, но без рандома
     )
     reply = completion.choices[0].message.content or ""
     return reply.strip()
 
 @dp.message(F.photo | F.document)
 async def handle_image(m: Message):
-    """Обрабатываем присланные изображения."""
+    """Обрабатываем присланные изображения (фото/док) — анализируем всё."""
     user_id = m.from_user.id
 
-    # проверяем лимит (владельца не ограничиваем)
+    # проверяем лимит
     used = await get_count(user_id)
     if used >= FREE_LIMIT:
         if await already_sent_feedback_this_month(user_id):
@@ -140,9 +149,8 @@ async def handle_image(m: Message):
         else:
             await m.answer(
                 "Лимит исчерпан. Хочешь ещё +3 бесплатных в этом месяце? "
-                "Отправь команду:
-
-/feedback Что понравилось/не понравилось в боте и что улучшить"
+                "Отправь команду:\n\n"
+                "/feedback Что понравилось/не понравилось в боте и что улучшить"
             )
         return
 
@@ -166,7 +174,7 @@ async def handle_image(m: Message):
 
         reply = await analyze_image_with_gpt(prepared)
 
-        # увеличиваем счётчик только для обычных пользователей
+        # увеличиваем счётчик и сообщаем остаток
         new_count = await inc_count(user_id)
         left = max(FREE_LIMIT - new_count, 0)
         await m.answer(f"{reply}\n\nОсталось бесплатных запросов в этом месяце: {left}")
