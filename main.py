@@ -30,11 +30,9 @@ bot = Bot(TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-WELCOME_TEXT = (
-    "Привет! Я Арт-feedback БОТ.
-"
-    "Пришли мне изображение — дам разбор. На старте у тебя {FREE_LIMIT} бесплатных запросов." 
-)
+WELCOME_TEXT = f"""Привет! Я Арт-feedback БОТ.
+Пришли мне изображение — дам разбор. На старте у тебя {FREE_LIMIT} бесплатных запросов.
+"""
 
 @dp.message(CommandStart())
 async def start(m: Message):
